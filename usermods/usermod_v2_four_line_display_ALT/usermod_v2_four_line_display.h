@@ -87,7 +87,11 @@ class FourLineDisplayUsermod : public Usermod {
       #endif
   
       DisplayType type = FLD_TYPE;    // display type
+#ifdef FLD_FLIP_DEFAULT
+      bool flip = true;               // Bluetooth Nugget: OLED mounted 180°
+#else
       bool flip = false;              // flip display 180°
+#endif
       uint8_t contrast = 10;          // screen contrast
       uint8_t lineHeight = 1;         // 1 row or 2 rows
       uint16_t refreshRate = REFRESH_RATE_MS;     // in ms

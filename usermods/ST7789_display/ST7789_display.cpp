@@ -69,6 +69,41 @@ class St7789DisplayUsermod : public Usermod {
 
     const uint8_t tftcharwidth = 19;  // Number of chars that fit on screen with text size set to 2
     long lastUpdate = 0;
+    long lastPreview = 0;             // Retia badge: live color-bar refresh timer
+
+    // Retia badge: a live bar across the bottom that mirrors the MAIN STRIP (bus 1,
+    // the 300-px J8 output). Redraws on its own ~60 ms cadence so it animates with the
+    // effect, independent of the (change-only) status text above it. No fillScreen ->
+    // no flicker. Sampled dynamically, so changing the strip length in the UI just works.
+    static const int BAR_Y = 210, BAR_H = 30, BAR_SEGS = 80;
+    void drawPreviewBar() {
+        size_t nb = BusManager::getNumBusses();
+        Bus* bus = BusManager::getBus(nb > 1 ? 1 : 0);   // bus 1 = strip; fall back to bus 0
+        if (!bus) return;
+        uint16_t start = bus->getStart();
+        uint16_t len = bus->getLength();
+        if (!len) return;
+        int bw = 320 / BAR_SEGS;
+        for (int i = 0; i < BAR_SEGS; i++) {
+            uint16_t idx = start + (len > 1 ? (uint32_t)i * (len - 1) / (BAR_SEGS - 1) : 0);
+            uint32_t c = strip.getPixelColor(idx);
+            tft.fillRect(i * bw, BAR_Y, bw, BAR_H, tft.color565(R(c), G(c), B(c)));
+        }
+    }
+
+    // Retia badge: header row — title + big brightness %, reclaiming the empty top.
+    void drawHeader() {
+        tft.setTextColor(TFT_CYAN, TFT_BLACK);
+        tft.setTextSize(3);
+        tft.setCursor(4, 6);
+        tft.print("WLED");
+        char pct[8];
+        sprintf_P(pct, PSTR("%3d%%"), (int)bri * 100 / 255);
+        tft.setTextColor(TFT_WHITE, TFT_BLACK);
+        tft.setCursor(212, 6);
+        tft.print(pct);
+        tft.drawFastHLine(0, 36, 320, TFT_DARKGREY);
+    }
 
     void center(String &line, uint8_t width) {
       int len = line.length();
@@ -144,8 +179,16 @@ class St7789DisplayUsermod : public Usermod {
             return;
         }
 
+        // Retia badge: park the other chip-selects on the shared SPI bus so a
+        // floating LoRa/SD/touch CS can't corrupt the display's bus traffic.
+        // (LEDs are driven over RMT, not SPI, so they're unaffected.)
+        for (int cs : {48 /*LoRa*/, 10 /*SD*/, 39 /*module-SD*/, 37 /*accessory*/, 14 /*touch*/}) {
+            pinMode(cs, OUTPUT);
+            digitalWrite(cs, HIGH);
+        }
+
         tft.init();
-        tft.setRotation(0);  //Rotation here is set up for the text to be readable with the port on the left. Use 1 to flip.
+        tft.setRotation(1);  //Retia badge: landscape 320x240
         tft.fillScreen(TFT_BLACK);
         tft.setTextColor(TFT_RED);
         tft.setCursor(60, 100);
@@ -179,6 +222,13 @@ class St7789DisplayUsermod : public Usermod {
      */
     void loop() override {
         char buff[LINE_BUFFER_SIZE];
+
+        // Retia badge: live color bar mirrors the strip; animate it on its own
+        // cadence, always (independent of the status text and the idle-off timer).
+        if (millis() - lastPreview >= 60) {
+            lastPreview = millis();
+            drawPreviewBar();
+        }
 
         // Check if we time interval for redrawing passes.
         if (millis() - lastUpdate < USER_LOOP_REFRESH_RATE_MS)
@@ -223,7 +273,9 @@ class St7789DisplayUsermod : public Usermod {
         #if defined(ESP8266)
             knownSsid = apActive ? WiFi.softAPSSID() : WiFi.SSID();
         #else
-            knownSsid = WiFi.SSID();
+            // Must mirror the change-check above (which uses apSSID in AP mode),
+            // else in AP-only mode knownSsid never matches -> redraw every loop -> flicker.
+            knownSsid = apActive ? String(apSSID) : WiFi.SSID();
         #endif
         knownIp = apActive ? IPAddress(4, 3, 2, 1) : WiFi.localIP();
         knownBrightness = bri;
@@ -234,6 +286,7 @@ class St7789DisplayUsermod : public Usermod {
 
         tft.fillScreen(TFT_BLACK);
 
+        drawHeader();     // Retia badge: title + big brightness % up top
         showTime();
 
         tft.setTextSize(2);
@@ -302,14 +355,8 @@ class St7789DisplayUsermod : public Usermod {
         sprintf_P(buff, PSTR("FX  Spd:%3d Int:%3d"), effectSpeed, effectIntensity);
         tft.print(buff);
 
-        // Fifth row with estimated mA usage
-        tft.setTextColor(TFT_SILVER);
-        tft.setCursor(0, 216);
-        // Print estimated milliamp usage (must specify the LED type in LED prefs for this to be a reasonable estimate).
-        tft.print("Current: ");
-        tft.setTextColor(TFT_ORANGE);
-        tft.print(BusManager::currentMilliamps());
-        tft.print("mA");
+        // Retia badge: the bottom (y=200-240) is the live LED preview bar.
+        drawPreviewBar();
     }
 
     /*
@@ -410,5 +457,5 @@ class St7789DisplayUsermod : public Usermod {
    //Your usermod will remain compatible as it does not need to implement all methods from the Usermod base class!
 };
 
-static name. st7789_display;
+static St7789DisplayUsermod st7789_display;
 REGISTER_USERMOD(st7789_display);

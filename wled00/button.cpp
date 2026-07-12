@@ -15,13 +15,41 @@
 static const char _mqtt_topic_button[] PROGMEM = "%s/button/%d";  // optimize flash usage
 static bool buttonBriDirection = false; // true: increase brightness, false: decrease brightness
 
+// Retia badge D-pad mappings (button indices 2-5 = UP/DOWN/LEFT/RIGHT):
+//   UP/DOWN    -> brightness +/-   LEFT/RIGHT -> primary color hue -/+
+#define BADGE_BRI_STEP  16
+#define BADGE_HUE_STEP  4096        // 1/16 of the color wheel per step (65536 = full wheel)
+static uint16_t badgeHue = 0;
+static inline void badgeBriUp()   { bri = (bri >= 255 - BADGE_BRI_STEP) ? 255 : bri + BADGE_BRI_STEP; stateUpdated(CALL_MODE_BUTTON); }
+static inline void badgeBriDown() { bri = (bri <= BADGE_BRI_STEP) ? 1 : bri - BADGE_BRI_STEP; stateUpdated(CALL_MODE_BUTTON); }
+static inline void badgeHueStep(int16_t d) { badgeHue += d; colorHStoRGB(badgeHue, 255, colPri); stateChanged = true; colorUpdated(CALL_MODE_BUTTON); }
+
 void shortPressAction(uint8_t b)
 {
+#ifdef WLED_BTN_DEBUG
+  Serial.printf("BTN short idx=%u pin=%d\n", b, (int)buttons[b].pin);
+#endif
   if (!buttons[b].macroButton) {
+#ifdef WLED_NUGGET_S2_DPAD
+    // USB Nugget: 4-button d-pad only (no A/B). WLED compacts the button vector
+    // over disabled (-1) pins, so BTNPIN=-1,9,18,11,7 lands UP,DOWN,LEFT,RIGHT at
+    // indices 1-4 (index 0 is the disabled placeholder). See cfg.cpp button init.
+    switch (b) {
+      case 1: badgeBriUp();   break;                 // UP    = brighter
+      case 2: badgeBriDown(); break;                 // DOWN  = dimmer
+      case 3: badgeHueStep(-BADGE_HUE_STEP); break;  // LEFT  = color back
+      case 4: badgeHueStep( BADGE_HUE_STEP); break;  // RIGHT = color forward
+    }
+#else
     switch (b) {
       case 0: toggleOnOff(); stateUpdated(CALL_MODE_BUTTON); break;
       case 1: ++effectCurrent %= strip.getModeCount(); stateChanged = true; colorUpdated(CALL_MODE_BUTTON); break;
+      case 2: badgeBriUp();   break;                 // Retia badge: UP    = brighter
+      case 3: badgeBriDown(); break;                 //             DOWN  = dimmer
+      case 4: badgeHueStep(-BADGE_HUE_STEP); break;  //             LEFT  = color back
+      case 5: badgeHueStep( BADGE_HUE_STEP); break;  //             RIGHT = color forward
     }
+#endif
   } else {
     applyPreset(buttons[b].macroButton, CALL_MODE_BUTTON_PRESET);
   }
@@ -38,10 +66,23 @@ void shortPressAction(uint8_t b)
 
 void longPressAction(uint8_t b)
 {
+#ifdef WLED_BTN_DEBUG
+  Serial.printf("BTN long  idx=%u pin=%d\n", b, (int)buttons[b].pin);
+#endif
   if (!buttons[b].macroLongPress) {
+#ifdef WLED_NUGGET_S2_DPAD
+    // USB Nugget d-pad (indices 1-4, see shortPressAction): no A/B, so the holds
+    // carry on/off + effect. UP=on/off, DOWN=next effect, LEFT/RIGHT=scroll hue.
+    switch (b) {
+      case 1: toggleOnOff(); stateUpdated(CALL_MODE_BUTTON); break;                                                     // hold UP    = on/off
+      case 2: ++effectCurrent %= strip.getModeCount(); stateChanged = true; colorUpdated(CALL_MODE_BUTTON); break;      // hold DOWN  = next effect
+      case 3: badgeHueStep(-BADGE_HUE_STEP); buttons[b].pressedTime = millis(); break;                                  // hold LEFT  = scroll color back
+      case 4: badgeHueStep( BADGE_HUE_STEP); buttons[b].pressedTime = millis(); break;                                  // hold RIGHT = scroll color fwd
+    }
+#else
     switch (b) {
       case 0: setRandomColor(colPri); colorUpdated(CALL_MODE_BUTTON); break;
-      case 1: 
+      case 1:
         if(buttonBriDirection) {
           if (bri == 255) break; // avoid unnecessary updates to brightness
           if (bri >= 255 - WLED_LONG_BRI_STEPS) bri = 255;
@@ -51,10 +92,16 @@ void longPressAction(uint8_t b)
           if (bri <= WLED_LONG_BRI_STEPS) bri = 1;
           else bri -= WLED_LONG_BRI_STEPS;
         }
-        stateUpdated(CALL_MODE_BUTTON); 
-        buttons[b].pressedTime = millis();         
+        stateUpdated(CALL_MODE_BUTTON);
+        buttons[b].pressedTime = millis();
         break; // repeatable action
+      // Retia badge D-pad: hold to repeat (ramp brightness / scroll color)
+      case 2: badgeBriUp();   buttons[b].pressedTime = millis(); break;
+      case 3: badgeBriDown(); buttons[b].pressedTime = millis(); break;
+      case 4: badgeHueStep(-BADGE_HUE_STEP); buttons[b].pressedTime = millis(); break;
+      case 5: badgeHueStep( BADGE_HUE_STEP); buttons[b].pressedTime = millis(); break;
     }
+#endif
   } else {
     applyPreset(buttons[b].macroLongPress, CALL_MODE_BUTTON_PRESET);
   }

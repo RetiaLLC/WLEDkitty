@@ -453,7 +453,13 @@ void WLED::setup()
 
   bool fsinit = false;
   DEBUGFS_PRINTLN(F("Mount FS"));
-#ifdef ARDUINO_ARCH_ESP32
+#if defined(WLED_LAUNCHER_GUEST)
+  // Badge launcher guest: the shared partition table's "spiffs" partition holds
+  // Meshtastic's settings. Point LittleFS at a partition label that doesn't exist
+  // so we NEVER mount or format it — WLED runs FS-less (config baked in at compile
+  // time), leaving Meshtastic's data intact across firmware switches.
+  fsinit = WLED_FS.begin(false, "/littlefs", 5, "wled_none");
+#elif defined(ARDUINO_ARCH_ESP32)
   fsinit = WLED_FS.begin(true);
 #else
   fsinit = WLED_FS.begin();

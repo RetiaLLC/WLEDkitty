@@ -746,7 +746,10 @@ WLED_GLOBAL bool notifyHue    _INIT(false);                       // send notifi
 #endif
 
 // effects
-WLED_GLOBAL byte effectCurrent _INIT(0);
+#ifndef DEFAULT_BOOT_FX
+#define DEFAULT_BOOT_FX 0
+#endif
+WLED_GLOBAL byte effectCurrent _INIT(DEFAULT_BOOT_FX); // badge: 63 = Pride 2015 (applied over seg.mode at boot, led.cpp)
 WLED_GLOBAL byte effectSpeed _INIT(128);
 WLED_GLOBAL byte effectIntensity _INIT(128);
 WLED_GLOBAL byte effectPalette _INIT(0);

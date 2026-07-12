@@ -39,7 +39,9 @@
 #endif
 
 #define DEFAULT_BRIGHTNESS (uint8_t)127
+#ifndef DEFAULT_MODE
 #define DEFAULT_MODE       (uint8_t)0
+#endif
 #define DEFAULT_SPEED      (uint8_t)128
 #define DEFAULT_INTENSITY  (uint8_t)128
 #define DEFAULT_COLOR      (uint32_t)0xFFA000
