@@ -179,10 +179,17 @@ class St7789DisplayUsermod : public Usermod {
             return;
         }
 
-        // Retia badge: park the other chip-selects on the shared SPI bus so a
+        // Retia: park the other chip-selects on the shared SPI bus so a
         // floating LoRa/SD/touch CS can't corrupt the display's bus traffic.
         // (LEDs are driven over RMT, not SPI, so they're unaffected.)
-        for (int cs : {48 /*LoRa*/, 10 /*SD*/, 39 /*module-SD*/, 37 /*accessory*/, 14 /*touch*/}) {
+        // Default list = 2024 DEF CON badge; other boards override with a
+        // bare comma list, -D RETIA_PARK_CS=9,10,21 (same idiom as DATA_PINS).
+        // These pins are driven HIGH as outputs, so the list must never
+        // contain an LED data, button, or buzzer pin.
+#ifndef RETIA_PARK_CS
+#define RETIA_PARK_CS 48 /*LoRa*/, 10 /*SD*/, 39 /*module-SD*/, 37 /*accessory*/, 14 /*touch*/
+#endif
+        for (int cs : {RETIA_PARK_CS}) {
             pinMode(cs, OUTPUT);
             digitalWrite(cs, HIGH);
         }

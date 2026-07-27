@@ -1,0 +1,161 @@
+# WLEDkitty automatic release build.
+#
+# Builds the Retia device envs and publishes a PRERELEASE — in the scriptkitty
+# release-channel contract a prerelease means "automatically compiled, NOT yet
+# verified on hardware". The scriptkitty.sh flasher offers these behind an
+# "untested" warning. After a human or the workbench verifies a build on real
+# hardware, run the "WLEDkitty promote" workflow to flip it to a full release
+# (= verified), which makes it the flasher's default.
+#
+# Tagging: wledkitty-v<version>-sk.<n> where <version> comes from package.json
+# and <n> auto-increments per version.
+name: WLEDkitty Release Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: "Extra release notes (what changed / why this build)"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wledkitty-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # device = asset name suffix, matching the scriptkitty channel
+          # asset_pattern "wledkitty-<device>.factory.bin"
+          - env: badge-dual
+            device: badge
+            chip: esp32s3
+            flash: 8MB
+          - env: nugget
+            device: nugget
+            chip: esp32s3
+            flash: 4MB
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: "npm"
+      - name: Build web UI
+        run: npm ci
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # the tasmota/pioarduino platforms WLED uses reject Python 3.14+
+          python-version: "3.12"
+          cache: "pip"
+      - name: Install PlatformIO + esptool
+        run: pip install -r requirements.txt esptool
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/.cache
+            ~/.buildcache
+            build_output
+          key: pio-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('platformio.ini', 'platformio_override.ini') }}
+
+      - name: Build firmware (${{ matrix.env }})
+        run: pio run -e ${{ matrix.env }}
+
+      - name: Merge factory image (DIO — QIO headers brick the badge)
+        run: |
+          BOOT_APP0=$(find ~/.platformio/packages -path '*framework-arduinoespressif32*/tools/partitions/boot_app0.bin' | head -1)
+          test -n "$BOOT_APP0" || { echo "::error::boot_app0.bin not found"; exit 1; }
+          esptool --chip ${{ matrix.chip }} merge-bin \
+            -o wledkitty-${{ matrix.device }}.factory.bin \
+            --flash-mode dio --flash-freq 80m --flash-size ${{ matrix.flash }} \
+            0x0 .pio/build/${{ matrix.env }}/bootloader.bin \
+            0x8000 .pio/build/${{ matrix.env }}/partitions.bin \
+            0xE000 "$BOOT_APP0" \
+            0x10000 .pio/build/${{ matrix.env }}/firmware.bin
+          # assert the image header really is DIO (byte 2 == 02)
+          HDR=$(xxd -p -l 4 wledkitty-${{ matrix.device }}.factory.bin)
+          echo "header: $HDR"
+          [ "${HDR:4:2}" = "02" ] || { echo "::error::flash-mode byte is not DIO"; exit 1; }
+          sha256sum wledkitty-${{ matrix.device }}.factory.bin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wledkitty-${{ matrix.device }}
+          path: wledkitty-*.factory.bin
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need all tags to pick the next -sk.<n>
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wledkitty-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create prerelease (auto build — untested)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXTRA_NOTES: ${{ inputs.notes }}
+        run: |
+          VERSION=$(python3 -c "import json; print(json.load(open('package.json'))['version'])")
+          N=1
+          while git rev-parse -q --verify "refs/tags/wledkitty-v${VERSION}-sk.${N}" >/dev/null; do
+            N=$((N + 1))
+          done
+          TAG="wledkitty-v${VERSION}-sk.${N}"
+          {
+            echo "**Automatic build — UNTESTED.** Compiled from \`${GITHUB_SHA}\` by CI;"
+            echo "nobody has verified this on hardware yet. It appears on"
+            echo "[scriptkitty.sh](https://scriptkitty.sh) under \"untested auto-builds\"."
+            echo
+            echo "After hardware verification, run the **WLEDkitty promote** workflow"
+            echo "with this tag to mark it verified and make it the flasher default."
+            echo
+            echo "| asset | device | sha256 |"
+            echo "|---|---|---|"
+            for f in dist/*.factory.bin; do
+              echo "| $(basename "$f") | ${f#dist/wledkitty-} | $(sha256sum "$f" | cut -d' ' -f1) |"
+            done
+            if [ -n "$EXTRA_NOTES" ]; then echo; echo "$EXTRA_NOTES"; fi
+          } > notes.md
+          gh release create "$TAG" --prerelease \
+            --title "WLEDkitty ${VERSION} auto build sk.${N}" \
+            --notes-file notes.md \
+            dist/*.factory.bin
+          echo "published $TAG"
+
+      - name: Ping scriptkitty.sh flasher
+        env:
+          SK_TOKEN: ${{ secrets.SCRIPTKITTY_DISPATCH_TOKEN }}
+        run: |
+          if [ -n "$SK_TOKEN" ]; then
+            curl -sf -X POST \
+              -H "Authorization: Bearer $SK_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/repos/RetiaLLC/scriptkitty.sh/dispatches \
+              -d '{"event_type":"channel-release"}' \
+              && echo "flasher rebuild triggered" \
+              || echo "::warning::dispatch to scriptkitty.sh failed — site picks this up on its weekly cron"
+          else
+            echo "::notice::SCRIPTKITTY_DISPATCH_TOKEN not set — site picks this up on its weekly cron or a manual run"
+          fi
