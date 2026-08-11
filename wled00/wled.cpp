@@ -108,7 +108,19 @@ void WLED::loop()
   #endif
   if (!realtimeMode || realtimeOverride || (realtimeMode && useMainSegmentOnly))  // block stuff if WARLS/Adalight is enabled
   {
-    if (apActive) dnsServer.processNextRequest();
+    if (apActive) {
+      #ifdef WLED_DNS_POLL_MS
+      // RETIA: throttle the captive-portal DNS poll. processNextRequest() takes the lwIP
+      // core lock (LOCK_TCPIP_CORE); on a tight AP loop it can crowd out the softAP DHCP
+      // server (same tcpip task), so a freshly-associated client's DHCP DISCOVER is slow
+      // to get an OFFER and the client falls back to APIPA (169.254.x). Polling at ~50 Hz
+      // is plenty responsive for captive DNS and leaves the lock free for DHCP.
+      static uint32_t lastDnsPoll = 0;
+      if (millis() - lastDnsPoll >= WLED_DNS_POLL_MS) { lastDnsPoll = millis(); dnsServer.processNextRequest(); }
+      #else
+      dnsServer.processNextRequest();
+      #endif
+    }
     #ifdef WLED_ENABLE_AOTA
     if (Network.isConnected() && aOtaEnabled && !otaLock && correctPIN) ArduinoOTA.handle();
     #endif
@@ -371,6 +383,15 @@ void WLED::setup()
   #ifdef ARDUINO_ARCH_ESP32
   gpio_pulldown_en((gpio_num_t)hardwareRX); delay(1); // suppress noise in case RX pin is floating (at low noise energy) - see issue #3128
   // note: can not use pinMode(): it routes GPIO through the GPIO matrix and detaches UART0 RX
+  #endif
+
+  #if defined(ARDUINO_ARCH_ESP32) && defined(WLED_I2S_SEL_GND)
+  // RETIA: hold an I2S MEMS mic's SELECT pin LOW so it outputs on the LEFT channel (what WLED reads).
+  // On the Newsheen puck the SPH0645 plugs into the sensor header with SEL landing on GPIO36 (SCL),
+  // which is otherwise unused/floating -> the mic picks an indeterminate channel -> silence. Grounding
+  // this pin in firmware means no rewiring on the plug-straight-in header.
+  pinMode(WLED_I2S_SEL_GND, OUTPUT);
+  digitalWrite(WLED_I2S_SEL_GND, LOW);
   #endif
 
   #ifdef WLED_BOOTUPDELAY
@@ -915,8 +936,17 @@ void WLED::handleConnection()
     return;
   }
 
-  byte stac = 0;
-  if (apActive) {
+  // RETIA micro-opt (not a bug fix): rate-limit the AP station-list poll to 4 Hz.
+  // esp_wifi_ap_get_sta_list() (and the ESP8266 equivalent) is a cross-core IPC into
+  // the WiFi driver; on a tight loop it otherwise fires tens of thousands of times/sec
+  // for a client-count that changes at human speed. Between polls we keep the last-known
+  // count (stacO) so the timeout logic below is unaffected. NB: this does NOT fix the
+  // Newsheen/Pusheen softAP-association issue — that was a boot-settle race, fixed by
+  // WLED_BOOTUPDELAY in the build env (see the pusheen-puck env / pusheen-puck skill).
+  byte stac = stacO;
+  static uint32_t lastAPStaPoll = 0;
+  if (apActive && (millis() - lastAPStaPoll >= 250)) {
+    lastAPStaPoll = millis();
 #ifdef ESP8266
     stac = wifi_softap_get_station_num();
 #else
