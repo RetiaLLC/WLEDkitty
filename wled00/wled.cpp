@@ -942,7 +942,7 @@ void WLED::handleConnection()
   // for a client-count that changes at human speed. Between polls we keep the last-known
   // count (stacO) so the timeout logic below is unaffected. NB: this does NOT fix the
   // Newsheen/Pusheen softAP-association issue — that was a boot-settle race, fixed by
-  // WLED_BOOTUPDELAY in the build env (see the pusheen-puck env / pusheen-puck skill).
+  // WLED_BOOTUPDELAY in the build env (see the newsheen-puck env / pusheen-puck skill).
   byte stac = stacO;
   static uint32_t lastAPStaPoll = 0;
   if (apActive && (millis() - lastAPStaPoll >= 250)) {

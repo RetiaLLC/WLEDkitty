@@ -43,7 +43,7 @@ jobs:
             device: nugget
             chip: esp32s3
             flash: 4MB
-          - env: pusheen-puck-audio
+          - env: newsheen-puck-audio
             device: puck
             chip: esp32s3
             flash: 16MB
